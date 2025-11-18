@@ -1,4 +1,4 @@
-# File: bot_core.py (Versi FINAL - Turnstile + reCAPTCHA)
+# File: bot_core.py (Versi FINAL - Perbaikan Logika Tunggu)
 import asyncio
 import os
 import random
@@ -30,7 +30,7 @@ NAVIGATION_DELAYS = {
 # -----------------------------------------------------------------
 async def login_account(account):
     """
-    Login menggunakan alur baru: Turnstile -> reCAPTCHA
+    Login menggunakan alur baru: reCAPTCHA -> Turnstile
     (Dipanggil oleh Opsi 1)
     """
     email = account['email']
@@ -74,36 +74,12 @@ async def login_account(account):
             console.print("Membuka halaman login...")
             await page.goto(constants.LOGIN_URL, timeout=90000, wait_until="domcontentloaded")
             
-            # 4. (BARU) Cek Halaman Challenge
-            content = await page.content()
-            if "Just a moment" in content or "Verify you are human" in content:
-                console.print("[yellow]Mendeteksi Cloudflare Turnstile Challenge...[/yellow]")
-                
-                # Panggil solver Turnstile
-                turnstile_token = await captcha_solver.solve_turnstile_async(constants.LOGIN_URL, proxy_settings)
-                if not turnstile_token:
-                    raise Exception("Gagal menyelesaikan Turnstile")
-                
-                # Suntikkan token Turnstile
-                try:
-                    # Temukan elemen input tersembunyi Turnstile
-                    response_element = page.locator('[name="cf-turnstile-response"]')
-                    await response_element.evaluate(f"(el, token) => el.value = token", turnstile_token)
-                    console.print("[green]Token Turnstile disuntikkan. Menunggu redirect...[/green]")
-                    
-                    # Beri waktu 5 detik bagi skrip Turnstile untuk memverifikasi dan mengirim
-                    await page.wait_for_timeout(5000) 
-                    
-                except Exception as e:
-                    console.print(f"[red]Gagal menyuntikkan token Turnstile: {e}[/red]")
-                    pass
-            
-            # 5. Tunggu Form Login (Setelah Turnstile)
+            # 4. Tunggu Form Login
             console.print("Menunggu form login muncul...")
             await page.wait_for_selector('input[name="username"]', timeout=90000)
             console.print("[green]Form login terdeteksi.[/green]")
             
-            # 6. Ambil KEDUA Token CSRF
+            # 5. Ambil KEDUA Token CSRF
             console.print("Mengambil token CSRF...")
             csrf_token_element = page.locator('input[name="token"]').first
             csrf_token = await csrf_token_element.get_attribute('value')
@@ -117,36 +93,68 @@ async def login_account(account):
             console.print(f"[green]Token 1 (token) didapat: {csrf_token[:10]}...[/green]")
             console.print(f"[green]Token 2 (csrf_test_name) didapat: {csrf_name_token[:10]}...[/green]")
 
-            # 7. Selesaikan reCAPTCHA
-            console.print("Memulai penyelesaian reCAPTCHA...")
-            captcha_token = await captcha_solver.solve_recaptcha_v2(constants.LOGIN_URL, proxy_settings)
+            # 6. Selesaikan reCAPTCHA
+            console.print("Memulai penyelesaian CAPTCHA #1 (reCAPTCHA)...")
+            captcha_token = await captcha_solver.solve_recaptcha_v2(constants.LOGIN_URL, None) # Pakai IP Lokal
             if not captcha_token:
                 raise Exception("Gagal mendapatkan token reCAPTCHA")
 
             console.print("[green]Token reCAPTCHA didapat.[/green] Mengisi form...")
             
-            # 8. Isi Form
+            # 7. Isi Form
             await page.fill('input[name="username"]', email)
             await page.fill('input[name="password"]', password)
 
-            # 9. Suntikkan SEMUA token
+            # 8. (PERBAIKAN) Suntikkan SEMUA token (menggunakan .evaluate)
             await page.evaluate(f"""document.getElementById('g-recaptcha-response').value = '{captcha_token}';""")
             await page.evaluate(f"""document.querySelector('input[name="token"]').value = '{csrf_token}';""")
             await page.evaluate(f"""document.querySelector('input[name="csrf_test_name"]').value = '{csrf_name_token}';""")
 
-            # 10. Klik Tombol Login
+            # 9. Klik Tombol Login
             console.print("Mengklik tombol login...")
             await page.click('button[type="submit"]')
             
-            # 11. Tunggu Hasil
-            console.print("Menunggu hasil login...")
+            # 10. (PERBAIKAN) Tunggu Halaman Berikutnya (Bisa Turnstile atau /users)
+            console.print("Menunggu hasil login... (Mengecek Turnstile pasca-login)")
+            
+            try:
+                # Tunggu hingga URL berubah DARI /login
+                await page.wait_for_url(lambda url: url != constants.LOGIN_URL, timeout=20000)
+            except Exception:
+                # Jika tidak berubah, berarti password/captcha salah
+                console.print(f"[bold red]GAGAL LOGIN: {email} (Halaman tidak berubah setelah login)[/bold red]")
+                return False
+
+            # 11. Cek Halaman Challenge SETELAH klik
+            content = await page.content()
+            if "Verify you are human" in content:
+                console.print("[yellow]Mendeteksi Cloudflare Turnstile Challenge (pasca-login)...[/yellow]")
+                
+                # Panggil solver Turnstile
+                turnstile_token = await captcha_solver.solve_turnstile_async(page.url, None) # Pakai IP Lokal
+                if not turnstile_token:
+                    raise Exception("Gagal menyelesaikan Turnstile")
+                
+                # Suntikkan token Turnstile
+                try:
+                    response_element = page.locator('[name="cf-turnstile-response"]')
+                    await response_element.fill(turnstile_token) # .fill() OK untuk Turnstile
+                    console.print("[green]Token Turnstile disuntikkan. Menunggu redirect...[/green]")
+                    await page.wait_for_timeout(5000) # Beri waktu untuk submit
+                except Exception as e:
+                    console.print(f"[red]Gagal menyuntikkan token Turnstile: {e}[/red]")
+                    pass
+            
+            # 12. Tunggu Hasil Akhir (kita HARUS ada di /users sekarang)
+            console.print("Menunggu hasil login final...")
             try:
                 await page.wait_for_url(lambda url: constants.PROFILE_URL in url, timeout=20000)
             except Exception:
-                console.print(f"[bold red]GAGAL LOGIN: {email}[/bold red]")
+                console.print(f"[bold red]GAGAL LOGIN: {email} (Gagal melewati Turnstile)[/bold red]")
+                console.print(f"URL Saat Ini: {page.url}")
                 return False
 
-            # 12. Sukses
+            # 13. Sukses
             console.print(f"[bold green]BERHASIL LOGIN: {email}[/bold green]")
             
             storage_state_path = os.path.join(STORAGE_STATE_DIR, f"state_{email.replace('@', '_').replace('.', '_')}.json")
@@ -235,7 +243,7 @@ async def check_cookie_validity(account):
 # -----------------------------------------------------------------
 async def login_and_register(account):
     """
-    (FUNGSI MASTER) Melakukan alur Turnstile -> reCAPTCHA -> Daftar
+    (FUNGSI MASTER) Melakukan alur reCAPTCHA -> Turnstile -> Daftar
     (Dipanggil oleh Opsi 3)
     """
     email = account['email']
@@ -277,28 +285,9 @@ async def login_and_register(account):
             )
             page = await context.new_page()
             
-            # === BAGIAN 1: LOGIN (DENGAN TURNSTILE) ===
+            # === BAGIAN 1: LOGIN (DENGAN reCAPTCHA -> TURNSTILE) ===
             console.print("Membuka halaman login...")
             await page.goto(constants.LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
-            
-            # (BARU) Cek Halaman Challenge
-            content = await page.content()
-            if "Just a moment" in content or "Verify you are human" in content:
-                console.print("[yellow]Mendeteksi Cloudflare Turnstile Challenge...[/yellow]")
-                
-                # Panggil solver Turnstile
-                turnstile_token = await captcha_solver.solve_turnstile_async(constants.LOGIN_URL, proxy_settings)
-                if not turnstile_token:
-                    raise Exception("Gagal menyelesaikan Turnstile")
-                
-                # Suntikkan token Turnstile
-                try:
-                    response_element = page.locator('[name="cf-turnstile-response"]')
-                    await response_element.evaluate(f"(el, token) => el.value = token", turnstile_token)
-                    console.print("[green]Token Turnstile disuntikkan. Menunggu redirect...[/green]")
-                    await page.wait_for_timeout(5000)
-                except Exception:
-                    pass
             
             console.print("Menunggu form login muncul...")
             await page.wait_for_selector('input[name="username"]', timeout=90000)
@@ -314,7 +303,8 @@ async def login_and_register(account):
                 raise Exception("Gagal menemukan semua token CSRF")
             
             console.print("Memulai penyelesaian CAPTCHA #1 (reCAPTCHA)...")
-            captcha_token = await captcha_solver.solve_recaptcha_v2(constants.LOGIN_URL, proxy_settings)
+            captcha_token = await captcha_solver.solve_recaptcha_v2(constants.LOGIN_URL, None) # Pakai IP Lokal
+            
             if not captcha_token:
                 raise Exception("Gagal mendapatkan token reCAPTCHA")
 
@@ -322,6 +312,8 @@ async def login_and_register(account):
             
             await page.fill('input[name="username"]', email)
             await page.fill('input[name="password"]', password)
+            
+            # (PERBAIKAN) Gunakan .evaluate()
             await page.evaluate(f"""document.getElementById('g-recaptcha-response').value = '{captcha_token}';""")
             await page.evaluate(f"""document.querySelector('input[name="token"]').value = '{csrf_token}';""")
             await page.evaluate(f"""document.querySelector('input[name="csrf_test_name"]').value = '{csrf_name_token}';""")
@@ -329,11 +321,43 @@ async def login_and_register(account):
             console.print("Mengklik tombol login...")
             await page.click('button[type="submit"]')
             
-            console.print("Menunggu hasil login...")
+            # (PERBAIKAN) Tunggu Halaman Berikutnya (Bisa Turnstile atau /users)
+            console.print("Menunggu hasil login... (Mengecek Turnstile pasca-login)")
+            
+            try:
+                # Tunggu hingga URL berubah DARI /login
+                await page.wait_for_url(lambda url: url != constants.LOGIN_URL, timeout=20000)
+            except Exception:
+                # Jika tidak berubah, berarti password/captcha salah
+                console.print(f"[bold red]GAGAL LOGIN: {email} (Halaman tidak berubah setelah login)[/bold red]")
+                return False
+            
+            # Cek Halaman Challenge SETELAH klik
+            content = await page.content()
+            if "Verify you are human" in content:
+                console.print("[yellow]Mendeteksi Cloudflare Turnstile Challenge (pasca-login)...[/yellow]")
+                
+                # Panggil solver Turnstile (TANPA PROXY)
+                turnstile_token = await captcha_solver.solve_turnstile_async(page.url, None) # Pakai IP Lokal
+                if not turnstile_token:
+                    raise Exception("Gagal menyelesaikan Turnstile")
+                
+                try:
+                    response_element = page.locator('[name="cf-turnstile-response"]')
+                    await response_element.fill(turnstile_token) # .fill() OK untuk Turnstile
+                    console.print("[green]Token Turnstile disuntikkan. Menunggu redirect...[/green]")
+                    await page.wait_for_timeout(5000)
+                except Exception as e:
+                    console.print(f"[red]Gagal menyuntikkan token Turnstile: {e}[/red]")
+                    pass
+            
+            # Tunggu Hasil Akhir (kita HARUS ada di /users sekarang)
+            console.print("Menunggu hasil login final...")
             try:
                 await page.wait_for_url(lambda url: constants.PROFILE_URL in url, timeout=20000)
             except Exception:
-                console.print(f"[bold red]GAGAL LOGIN: {email}[/bold red]")
+                console.print(f"[bold red]GAGAL LOGIN: {email} (Gagal melewati Turnstile)[/bold red]")
+                console.print(f"URL Saat Ini: {page.url}")
                 return False
 
             console.print(f"[bold green]BERHASIL LOGIN: {email}[/bold green]")
@@ -345,15 +369,22 @@ async def login_and_register(account):
             
             console.print("Mencari dan mengklik tombol 'Menu Antrean'...")
             try:
-                await page.locator('a[href="https://antrean.logammulia.com/antrian"]').first.click()
-                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                # Perbaikan: Gunakan selector yang lebih spesifik
+                menu_button_selector = f'a.btn.btn-primary[href="{constants.QUEUE_PAGE_URL}"]'
+                
+                # Tunggu tombolnya sampai bisa diklik
+                await page.wait_for_selector(menu_button_selector, state="visible", timeout=10000)
+                
+                # Klik dan TUNGGU navigasi (cara normal)
+                async with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                    await page.locator(menu_button_selector).click()
 
             except Exception as e:
                 console.print(f"[bold red]GAGAL: Tidak bisa mengklik 'Menu Antrean'.[/bold red] {e}")
                 return False
             
             if constants.QUEUE_PAGE_URL not in page.url:
-                 console.print(f"[bold red]GAGAL: Setelah klik, tidak mendarat di /antrian. URL: {page.url}[/bold red]")
+                 console.print(f"[bold red]GAGAL: Setelah klik, tidak mendarat di /antrean. URL: {page.url}[/bold red]")
                  return False
             
             console.print("[green]Berhasil menavigasi ke halaman antrean.[/green]")
@@ -374,7 +405,7 @@ async def login_and_register(account):
 
             console.print("Mengklik 'Tampilkan Butik'...")
             async with page.expect_navigation(wait_until="domcontentloaded"):
-                await page.click('form[action="https://antrean.logammulia.com/antrian"] button')
+                await page.click(f'form[action="{constants.QUEUE_PAGE_URL}"] button')
             
             console.print("Mencari slot waktu yang tersedia...")
             await page.wait_for_selector('select[name="wakda"]', timeout=30000)
@@ -397,21 +428,22 @@ async def login_and_register(account):
                 
                 console.print("Memulai penyelesaian CAPTCHA #2 (reCAPTCHA Halaman Slot)...")
                 # Kita panggil reCAPTCHA, BUKAN Turnstile
-                captcha_token_2 = await captcha_solver.solve_recaptcha_v2(page.url, proxy_settings)
+                captcha_token_2 = await captcha_solver.solve_recaptcha_v2(page.url, None) # Pakai IP Lokal
                 if not captcha_token_2:
                     raise Exception("Gagal mendapatkan token CAPTCHA #2")
                 
                 console.print("[green]Token CAPTCHA #2 didapat.[/green]")
                 
-                token_form_2 = await page.locator('form[action*="/antrian/ambil"] input[name="token"]').get_attribute('value')
+                token_form_2 = await page.locator(f'form[action*="{constants.QUEUE_SUBMIT_URL}"] input[name="token"]').get_attribute('value')
                 
-                await page.evaluate(f"""document.querySelector('form[action*="/antrian/ambil"] textarea[name="g-recaptcha-response"]').value = '{captcha_token_2}';""")
-                await page.evaluate(f"""document.querySelector('form[action*="/antrian/ambil"] input[name="token"]').value = '{token_form_2}';""")
+                # (PERBAIKAN) Gunakan .evaluate()
+                await page.evaluate(f"""document.querySelector('form[action*="{constants.QUEUE_SUBMIT_URL}"] textarea[name="g-recaptcha-response"]').value = '{captcha_token_2}';""")
+                await page.evaluate(f"""document.querySelector('form[action*="{constants.QUEUE_SUBMIT_URL}"] input[name="token"]').value = '{token_form_2}';""")
 
                 
                 console.print("Mengklik tombol 'Ambil Antrean'...")
                 async with page.expect_navigation(wait_until="domcontentloaded"):
-                    await page.click('form[action*="/antrian/ambil"] button')
+                    await page.click(f'form[action*="{constants.QUEUE_SUBMIT_URL}"] button')
                     
                 console.print(f"URL Akhir: {page.url}")
                 try:

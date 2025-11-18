@@ -34,8 +34,8 @@ HOME_URL = "https://antrean.logammulia.com/"
 LOGIN_URL = f"{BASE_URL}/login"
 REGISTER_URL = f"{BASE_URL}/register"
 PROFILE_URL = f"{BASE_URL}/users"
-QUEUE_PAGE_URL = f"{BASE_URL}/antrian"
-QUEUE_SUBMIT_URL = f"{BASE_URL}/antrian/ambil"
+QUEUE_PAGE_URL = f"{BASE_URL}/antrean"
+QUEUE_SUBMIT_URL = f"{BASE_URL}/antrean/ambil"
 
 # CAPTCHA
 RECAPTCHA_SITE_KEY = "6LdxTgUsAAAAAJ80-chHLt5PiK-xv1HbLPqQ3nB4"

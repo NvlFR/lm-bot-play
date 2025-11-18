@@ -1,4 +1,4 @@
-# File: captcha_solver.py (Versi BARU - reCAPTCHA + Turnstile)
+# File: captcha_solver.py (Versi Jaringan Lokal 2Captcha)
 import asyncio
 from twocaptcha import AsyncTwoCaptcha, ValidationException, NetworkException, ApiException, TimeoutException
 from rich.console import Console
@@ -10,37 +10,35 @@ import constants
 # Inisialisasi console
 console = Console()
 
-# Inisialisasi solver. Kita buat satu kali saja.
-solver = AsyncTwoCaptcha(
-    apiKey=config.API_KEY_2CAPTCHA,
-    defaultTimeout=180,  # Waktu tunggu polling (detik)
-    pollingInterval=5      # Jeda antar cek
-)
+# (PERBAIKAN) Cek API Key SEBELUM inisialisasi
+if not config.API_KEY_2CAPTCHA or config.API_KEY_2CAPTCHA == "KEY_ANDA_DISINI":
+    console.print("[bold red]FATAL: API_KEY_2CAPTCHA tidak ditemukan di file config.py atau .env[/bold red]")
+    solver = None
+else:
+    solver = AsyncTwoCaptcha(
+        apiKey=config.API_KEY_2CAPTCHA,
+        defaultTimeout=180,  # Waktu tunggu polling (detik)
+        pollingInterval=5      # Jeda antar cek
+    )
 
 async def solve_recaptcha_v2(page_url, proxy_settings=None):
     """
     Menyelesaikan reCAPTCHA V2 (Kotak "I'm not a robot").
+    Fungsi ini SENGAJA MENGABAIKAN 'proxy_settings' dan pakai IP lokal.
     """
-    
-    # 1. Siapkan konfigurasi proxy (jika ada)
-    proxy_dict = None
-    if proxy_settings:
-        try:
-            host_port = proxy_settings['server'].replace('http://', '')
-            proxy_string = f"{proxy_settings['username']}:{proxy_settings['password']}@{host_port}"
-            proxy_dict = {'type': 'HTTP', 'uri': proxy_string}
-        except Exception as e:
-            console.print(f"[red]Gagal memformat string proxy: {e}[/red]")
-            proxy_dict = None
-
+    if not solver: 
+        console.print("[bold red]Solver 2Captcha tidak terinisialisasi (Cek API Key).[/bold red]")
+        return None
+        
     # 2. Kirim tugas ke 2Captcha
     try:
         console.print(f"Mengirim tugas reCAPTCHA V2 ke 2Captcha...")
+        console.print("[cyan]Solver akan menggunakan jaringannya sendiri (bukan proxy)...[/cyan]")
         
         result = await solver.recaptcha(
             sitekey=constants.RECAPTCHA_SITE_KEY, # Sitekey reCAPTCHA
             url=page_url,
-            proxy=proxy_dict
+            proxy=None # <-- SENGAJA DISET None
         )
         
         token = result.get('code')
@@ -52,11 +50,8 @@ async def solve_recaptcha_v2(page_url, proxy_settings=None):
             return None
 
     # 3. Tangani Error
-    except TimeoutException as e:
-        console.print(f"[bold red]2Captcha Timeout Error (reCAPTCHA): Gagal solve dalam 180 detik. {e}[/bold red]")
-        return None
     except Exception as e:
-        console.print(f"[bold red]Error tidak diketahui di reCAPTCHA solver: {e}[/bold red]")
+        console.print(f"[bold red]Error tidak diketahui di reCAPTCHA solver: {repr(e)}[/bold red]") 
         return None
 
 # -----------------------------------------------------------------
@@ -65,27 +60,21 @@ async def solve_recaptcha_v2(page_url, proxy_settings=None):
 async def solve_turnstile_async(page_url, proxy_settings=None):
     """
     (FUNGSI BARU) Menyelesaikan Cloudflare Turnstile.
+    Fungsi ini SENGAJA MENGABAIKAN 'proxy_settings' dan pakai IP lokal.
     """
-    
-    # 1. Siapkan konfigurasi proxy (jika ada)
-    proxy_dict = None
-    if proxy_settings:
-        try:
-            host_port = proxy_settings['server'].replace('http://', '')
-            proxy_string = f"{proxy_settings['username']}:{proxy_settings['password']}@{host_port}"
-            proxy_dict = {'type': 'HTTP', 'uri': proxy_string}
-        except Exception as e:
-            console.print(f"[red]Gagal memformat string proxy: {e}[/red]")
-            proxy_dict = None
-
+    if not solver: 
+        console.print("[bold red]Solver 2Captcha tidak terinisialisasi (Cek API Key).[/bold red]")
+        return None
+        
     # 2. Kirim tugas ke 2Captcha
     try:
         console.print(f"Mengirim tugas Turnstile ke 2Captcha...")
+        console.print("[cyan]Solver akan menggunakan jaringannya sendiri (bukan proxy)...[/cyan]")
         
         result = await solver.turnstile(
             sitekey=constants.TURNSTILE_SITE_KEY, # Sitekey Turnstile
             url=page_url,
-            proxy=proxy_dict
+            proxy=None # <-- SENGAJA DISET None
         )
         
         token = result.get('code')
@@ -97,9 +86,6 @@ async def solve_turnstile_async(page_url, proxy_settings=None):
             return None
 
     # 3. Tangani Error
-    except TimeoutException as e:
-        console.print(f"[bold red]2Captcha Timeout Error (Turnstile): Gagal solve dalam 180 detik. {e}[/bold red]")
-        return None
     except Exception as e:
-        console.print(f"[bold red]Error tidak diketahui di Turnstile solver: {e}[/bold red]")
+        console.print(f"[bold red]Error tidak diketahui di Turnstile solver: {repr(e)}[/bold red]") 
         return None

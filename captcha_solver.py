@@ -1,132 +1,105 @@
-# File: captcha_solver.py (Versi Proxy - Sesuai Tes Sukses)
-import requests
-import time
+# File: captcha_solver.py (Versi BARU - reCAPTCHA + Turnstile)
+import asyncio
+from twocaptcha import AsyncTwoCaptcha, ValidationException, NetworkException, ApiException, TimeoutException
 from rich.console import Console
 
-# Impor variabel dari file config dan constants kita
+# Impor dari file kita yang lain
 import config
 import constants
 
 # Inisialisasi console
 console = Console()
 
-def solve_recaptcha_v2(proxy_settings=None):
+# Inisialisasi solver. Kita buat satu kali saja.
+solver = AsyncTwoCaptcha(
+    apiKey=config.API_KEY_2CAPTCHA,
+    defaultTimeout=180,  # Waktu tunggu polling (detik)
+    pollingInterval=5      # Jeda antar cek
+)
+
+async def solve_recaptcha_v2(page_url, proxy_settings=None):
     """
-    Mengirim tugas reCAPTCHA V2 ke 2Captcha dan menunggu solusinya.
-    Menggunakan proxy jika disediakan.
+    Menyelesaikan reCAPTCHA V2 (Kotak "I'm not a robot").
     """
     
-    API_KEY = config.API_KEY_2CAPTCHA
-    if not API_KEY or API_KEY == "KEY_ANDA_DISINI":
-        console.print("[bold red]ERROR: API Key 2Captcha belum diatur di file .env[/bold red]")
-        return None
-
-    PAGE_URL = constants.LOGIN_URL 
-    SITE_KEY = constants.RECAPTCHA_SITE_KEY
-
-    console.print(f"Mengirim tugas CAPTCHA ke 2Captcha untuk {PAGE_URL}...")
-
-    # 1. Kirim permintaan awal ke 2Captcha (in.php)
-    try:
-        url_in = "http://2captcha.com/in.php"
-        payload_in = {
-            'key': API_KEY,
-            'method': 'userrecaptcha',
-            'googlekey': SITE_KEY,
-            'pageurl': PAGE_URL,
-            'json': 1  # Minta respons dalam format JSON
-        }
-        
-        # --- (INI BAGIAN PENTING) ---
-        # Jika kita punya proxy, kirimkan ke 2Captcha
-        if proxy_settings:
-            console.print("[cyan]Mengirim informasi proxy ke 2Captcha...[/cyan]")
-            # Format: user:pass@host:port
-            host_port = proxy_settings['server'].replace('http://', '')
-            proxy_string = (
-                f"{proxy_settings['username']}:{proxy_settings['password']}@"
-                f"{host_port}"
-            )
-            payload_in['proxy'] = proxy_string
-            payload_in['proxytype'] = 'HTTP'
-        else:
-            console.print("[yellow]Menyelesaikan CAPTCHA tanpa proxy (mungkin gagal)...[/yellow]")
-        # --- (AKHIR BAGIAN PENTING) ---
-
-        response_in = requests.post(url_in, data=payload_in, timeout=30)
-        response_in.raise_for_status()
-        
-        result_in = response_in.json()
-
-        if result_in['status'] == 0:
-            console.print(f"[bold red]2Captcha Error: {result_in['request']}[/bold red]")
-            return None
-        
-        request_id = result_in['request']
-        console.print(f"[green]Tugas CAPTCHA berhasil dikirim. ID Tugas: {request_id}[/green]")
-        console.print("Menunggu hasil solusi (maks 180 detik)...")
-
-    except requests.RequestException as e:
-        console.print(f"[bold red]Gagal mengirim tugas ke 2Captcha: {e}[/bold red]")
-        return None
-
-    # 2. Polling hasil
-    url_res = "http://2captcha.com/res.php"
-    payload_res = {
-        'key': API_KEY,
-        'action': 'get',
-        'id': request_id,
-        'json': 1
-    }
-    
-    start_time = time.time()
-    while True:
-        time.sleep(5) # Jeda 5 detik
-
-        if time.time() - start_time > 180: # Timeout 3 menit
-            console.print("[bold red]Gagal: Timeout 180 detik menunggu solusi CAPTCHA.[/bold red]")
-            return None
-        
+    # 1. Siapkan konfigurasi proxy (jika ada)
+    proxy_dict = None
+    if proxy_settings:
         try:
-            response_res = requests.get(url_res, params=payload_res, timeout=30)
-            response_res.raise_for_status()
-            
-            result_res = response_res.json()
+            host_port = proxy_settings['server'].replace('http://', '')
+            proxy_string = f"{proxy_settings['username']}:{proxy_settings['password']}@{host_port}"
+            proxy_dict = {'type': 'HTTP', 'uri': proxy_string}
+        except Exception as e:
+            console.print(f"[red]Gagal memformat string proxy: {e}[/red]")
+            proxy_dict = None
 
-            if result_res['status'] == 1:
-                solution_token = result_res['request']
-                console.print(f"[bold green]Solusi CAPTCHA Ditemukan![/bold green]")
-                return solution_token
-            
-            elif result_res['request'] == 'CAPCHA_NOT_READY':
-                console.print("...Solusi belum siap, mencoba lagi...")
-                continue
-                
-            else:
-                console.print(f"[bold red]2Captcha Error: {result_res['request']}[/bold red]")
-                return None
+    # 2. Kirim tugas ke 2Captcha
+    try:
+        console.print(f"Mengirim tugas reCAPTCHA V2 ke 2Captcha...")
+        
+        result = await solver.recaptcha(
+            sitekey=constants.RECAPTCHA_SITE_KEY, # Sitekey reCAPTCHA
+            url=page_url,
+            proxy=proxy_dict
+        )
+        
+        token = result.get('code')
+        if token:
+            console.print(f"[bold green]Solusi reCAPTCHA V2 Ditemukan![/bold green]")
+            return token
+        else:
+            console.print(f"[bold red]2Captcha Error: Hasil reCAPTCHA tidak mengandung 'code'.[/bold red]")
+            return None
 
-        except requests.RequestException as e:
-            console.print(f"[bold red]Gagal mengecek hasil CAPTCHA: {e}[/bold red]")
-            time.sleep(5)
+    # 3. Tangani Error
+    except TimeoutException as e:
+        console.print(f"[bold red]2Captcha Timeout Error (reCAPTCHA): Gagal solve dalam 180 detik. {e}[/bold red]")
+        return None
+    except Exception as e:
+        console.print(f"[bold red]Error tidak diketahui di reCAPTCHA solver: {e}[/bold red]")
+        return None
 
-
-# --- Bagian ini untuk testing ---
-if __name__ == "__main__":
-    console.print("[bold]--- Menjalankan Tes Solver CAPTCHA (Versi Proxy) ---[/bold]")
+# -----------------------------------------------------------------
+# --- FUNGSI BARU UNTUK TURNSTILE ---
+# -----------------------------------------------------------------
+async def solve_turnstile_async(page_url, proxy_settings=None):
+    """
+    (FUNGSI BARU) Menyelesaikan Cloudflare Turnstile.
+    """
     
-    proxy_settings_test = None
-    if config.USE_PROXY:
-         proxy_settings_test = {
-            "server": f"http://{config.PROXY_HOST}:{config.PROXY_PORT}",
-            "username": config.PROXY_USER,
-            "password": config.PROXY_PASS
-        }
+    # 1. Siapkan konfigurasi proxy (jika ada)
+    proxy_dict = None
+    if proxy_settings:
+        try:
+            host_port = proxy_settings['server'].replace('http://', '')
+            proxy_string = f"{proxy_settings['username']}:{proxy_settings['password']}@{host_port}"
+            proxy_dict = {'type': 'HTTP', 'uri': proxy_string}
+        except Exception as e:
+            console.print(f"[red]Gagal memformat string proxy: {e}[/red]")
+            proxy_dict = None
 
-    token = solve_recaptcha_v2(proxy_settings_test)
-    
-    if token:
-        console.print("\n[green]Tes Berhasil.[/green]")
-        console.print(f"Token yang didapat (awal): {token[:20]}...")
-    else:
-        console.print("\n[red]Tes Gagal.[/red]")
+    # 2. Kirim tugas ke 2Captcha
+    try:
+        console.print(f"Mengirim tugas Turnstile ke 2Captcha...")
+        
+        result = await solver.turnstile(
+            sitekey=constants.TURNSTILE_SITE_KEY, # Sitekey Turnstile
+            url=page_url,
+            proxy=proxy_dict
+        )
+        
+        token = result.get('code')
+        if token:
+            console.print(f"[bold green]Solusi Turnstile Ditemukan![/bold green]")
+            return token
+        else:
+            console.print(f"[bold red]2Captcha Error: Hasil Turnstile tidak mengandung 'code'.[/bold red]")
+            return None
+
+    # 3. Tangani Error
+    except TimeoutException as e:
+        console.print(f"[bold red]2Captcha Timeout Error (Turnstile): Gagal solve dalam 180 detik. {e}[/bold red]")
+        return None
+    except Exception as e:
+        console.print(f"[bold red]Error tidak diketahui di Turnstile solver: {e}[/bold red]")
+        return None

@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 # Memuat variabel dari file .env
 load_dotenv()
 
+
+HEADLESS_MODE = False
 # --- Pengaturan Jaringan & Proxy ---
 # Membaca pengaturan USE_PROXY dari .env
 # .lower() == "true" akan mengubah string "true" menjadi boolean True

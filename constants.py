@@ -30,6 +30,7 @@ BUTIK_DATA = [
 
 # URL
 BASE_URL = "https://antrean.logammulia.com"
+HOME_URL = "https://antrean.logammulia.com/"
 LOGIN_URL = f"{BASE_URL}/login"
 REGISTER_URL = f"{BASE_URL}/register"
 PROFILE_URL = f"{BASE_URL}/users"

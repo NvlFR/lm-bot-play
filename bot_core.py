@@ -1,4 +1,4 @@
-# File: bot_core.py (Versi Final dengan Perbaikan STORAGE_STATE_DIR)
+# File: bot_core.py (Perbaikan Timeout networkidle)
 import asyncio
 import os
 import random
@@ -15,13 +15,9 @@ import account_manager
 
 console = Console()
 
-# --------------------------------------------------
-# --- PERBAIKAN DI SINI ---
-# --------------------------------------------------
 # Path untuk menyimpan status login (cookies)
 STORAGE_STATE_DIR = "browser_states"
 os.makedirs(STORAGE_STATE_DIR, exist_ok=True)
-# --------------------------------------------------
 
 
 NAVIGATION_DELAYS = {
@@ -54,7 +50,7 @@ async def handle_cloudflare_blocking(page):
         return False
 
 # -----------------------------------------------------------------
-# --- FUNGSI LOGIN DITULIS ULANG UNTUK PATCHRIGHT ---
+# --- FUNGSI LOGIN ---
 # -----------------------------------------------------------------
 async def login_account(account):
     """
@@ -100,8 +96,14 @@ async def login_account(account):
             
             # 4. Navigasi ke Halaman Login
             console.print("Membuka halaman login...")
-            await page.goto(constants.LOGIN_URL, timeout=60000, wait_until="networkidle")
-            await asyncio.sleep(random.randint(3, 6))
+            
+            # --- (PERUBAHAN DI SINI) ---
+            # Kita ganti 'networkidle' ke 'domcontentloaded'
+            # Ini akan menyelesaikan timeout
+            await page.goto(constants.LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
+            # --- (AKHIR PERUBAHAN) ---
+
+            await asyncio.sleep(random.randint(1, 3)) # Jeda singkat
             
             # 5. Tangani Blokir CF
             if not await handle_cloudflare_blocking(page):
@@ -128,7 +130,7 @@ async def login_account(account):
 
             # 8. Selesaikan CAPTCHA
             console.print("Memulai penyelesaian CAPTCHA...")
-            captcha_token = captcha_solver.solve_recaptcha_v2()
+            captcha_token = captcha_solver.solve_recaptcha_v2(proxy_settings)
             if not captcha_token:
                 raise Exception("Gagal mendapatkan token CAPTCHA")
 
@@ -181,7 +183,6 @@ async def login_account(account):
             # 13. Sukses
             console.print(f"[bold green]BERHASIL LOGIN: {email}[/bold green]")
             
-            # --- SEKARANG INI AKAN BERHASIL ---
             storage_state_path = os.path.join(STORAGE_STATE_DIR, f"state_{email.replace('@', '_').replace('.', '_')}.json")
             await context.storage_state(path=storage_state_path)
             console.print(f"Status login disimpan ke {storage_state_path}")
@@ -204,7 +205,7 @@ async def login_account(account):
 
 # --- BLOK TES ---
 async def main_test():
-    console.print("[bold]--- Menjalankan Tes Login (Fase 3 - Perbaikan FINAL) ---[/bold]")
+    console.print("[bold]--- Menjalankan Tes Login (Fase 3 - Perbaikan Timeout) ---[/bold]")
     
     accounts = account_manager.get_all_accounts()
     
